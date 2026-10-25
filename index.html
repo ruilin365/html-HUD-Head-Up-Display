@@ -1,0 +1,1423 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>HUD</title>
+<style>
+  :root{--g:#9dff3f;--rgb:157,255,63;}
+  html,body{margin:0;padding:0;width:100%;height:100%;background:#000;overflow:hidden;
+    font-family:ui-monospace,"Roboto Mono",Menlo,Consolas,monospace;
+    -webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;
+    touch-action:none;overscroll-behavior:none;}
+  canvas{position:fixed;left:0;top:0;width:100%;height:100%;display:block;}
+  #glow{filter:blur(5px) saturate(1.35);opacity:.8;}
+  #hud{position:fixed;z-index:2;}
+  /* CRT 扫描线 + 暗角 */
+  #tint{position:fixed;inset:0;z-index:5;pointer-events:none;
+    background:
+      repeating-linear-gradient(to bottom,
+        rgba(0,0,0,0) 0px, rgba(0,0,0,0) 2px,
+        rgba(0,0,0,.32) 2px, rgba(0,0,0,.32) 3px),
+      radial-gradient(ellipse 90% 70% at 50% 50%,
+        rgba(0,0,0,0) 40%, rgba(0,0,0,.55) 100%);
+  }
+  #boot{position:fixed;inset:0;z-index:20;background:#000;
+    display:flex;align-items:center;justify-content:center;flex-direction:column;
+    transition:opacity .45s ease;color:var(--g);}
+  #boot.hide{opacity:0;pointer-events:none;}
+  #boot .t{font-size:11px;letter-spacing:.55em;opacity:.55;margin-bottom:6px;}
+  #boot .h{font-size:40px;font-weight:700;letter-spacing:.22em;margin-bottom:4px;
+    text-shadow:0 0 18px rgba(var(--rgb),.55);}
+  #boot .s{font-size:11px;letter-spacing:.28em;opacity:.45;}
+  #boot .box{margin-top:34px;padding:0 26px;text-align:center;}
+  #boot .tip{font-size:11px;line-height:2;opacity:.42;letter-spacing:.06em;}
+  #go{margin-top:26px;background:transparent;color:var(--g);border:1px solid rgba(var(--rgb),.6);
+    padding:13px 46px;font-size:14px;letter-spacing:.4em;font-family:inherit;border-radius:2px;
+    text-indent:.4em;box-shadow:0 0 22px rgba(var(--rgb),.18) inset;}
+  #go:active{background:rgba(var(--rgb),.14);}
+
+  /* ── 隐藏式设置入口：点屏幕出现，3 秒后自动隐藏 ── */
+  #gear{position:fixed;right:12px;top:64px;z-index:11;
+    width:40px;height:40px;padding:0;display:flex;
+    align-items:center;justify-content:center;
+    background:rgba(0,0,0,.62);border:1px solid rgba(var(--rgb),.55);
+    color:var(--g);border-radius:50%;font:600 15px/1 ui-monospace,monospace;
+    opacity:0;pointer-events:none;transition:opacity .22s ease;
+    -webkit-appearance:none;}
+  #gear.show{opacity:1;pointer-events:auto;}
+  #gear:active{background:rgba(var(--rgb),.22);}
+
+  /* ── 浮动设置菜单 ── */
+  #menu{position:fixed;inset:0;z-index:14;display:none;
+    background:rgba(0,0,0,.88);color:var(--g);
+    align-items:center;justify-content:center;padding:20px;}
+  #menu.show{display:flex;}
+  #menu .panel{width:100%;max-width:360px;
+    border:1px solid rgba(var(--rgb),.55);border-radius:4px;
+    background:#030a01;padding:18px 16px 14px;
+    box-shadow:0 0 34px rgba(var(--rgb),.13);}
+  #menu .ttl{font-size:11px;letter-spacing:.42em;opacity:.55;margin-bottom:16px;}
+  #menu .row{display:flex;align-items:center;justify-content:space-between;
+    gap:10px;margin-bottom:11px;}
+  /* GPS 模式下，仅加速度模式才有效的两项变暗并禁用 */
+  #menu .row.disabled{opacity:.3;pointer-events:none;}
+  #menu .lbl{font-size:12px;letter-spacing:.1em;opacity:.72;white-space:nowrap;}
+  #menu .seg{display:flex;gap:6px;}
+  #menu .seg button{
+    background:transparent;border:1px solid rgba(var(--rgb),.32);
+    color:var(--g);font:600 12px/1 inherit;padding:8px 13px;border-radius:2px;
+    letter-spacing:.04em;-webkit-appearance:none;}
+  #menu .seg button.on{background:var(--g);color:#04120a;border-color:var(--g);}
+  #menu .close{width:100%;margin-top:10px;padding:12px;background:transparent;
+    border:1px solid rgba(var(--rgb),.5);color:var(--g);border-radius:2px;
+    font:600 12px/1 inherit;letter-spacing:.34em;-webkit-appearance:none;}
+  #menu .close:active{background:rgba(var(--rgb),.14);}
+</style>
+</head>
+<body>
+<canvas id="glow"></canvas>
+<canvas id="hud"></canvas>
+<div id="tint"></div>
+
+<button id="gear" type="button">≡</button>
+
+<div id="menu">
+  <div class="panel">
+    <div class="ttl">SETTINGS</div>
+
+    <div class="row">
+      <span class="lbl">数据源</span>
+      <div class="seg" id="segSrc">
+        <button data-src="gps">GPS</button>
+        <button data-src="accel">加速度</button>
+      </div>
+    </div>
+
+    <div class="row">
+      <span class="lbl">屏幕方向</span>
+      <div class="seg" id="segRot">
+        <button data-rot="0">竖屏</button>
+        <button data-rot="1">横屏</button>
+      </div>
+    </div>
+
+    <div class="row">
+      <span class="lbl">速度倍率</span>
+      <div class="seg" id="segMult">
+        <button data-mult="1">1×</button>
+        <button data-mult="10">10×</button>
+        <button data-mult="100">100×</button>
+      </div>
+    </div>
+
+    <div class="row">
+      <span class="lbl">前向 m/s</span>
+      <div class="seg" id="segFwd">
+        <button data-fwd="0">0</button>
+        <button data-fwd="10">10</button>
+        <button data-fwd="100">100</button>
+      </div>
+    </div>
+
+    <div class="row">
+      <span class="lbl">主题</span>
+      <div class="seg" id="segTheme"></div>
+    </div>
+
+    <div class="row">
+      <span class="lbl">单位</span>
+      <div class="seg" id="segUnit">
+        <button data-unit="imp">英制</button>
+        <button data-unit="met">公制</button>
+      </div>
+    </div>
+
+    <button class="close" id="closeMenu" type="button">关闭</button>
+  </div>
+</div>
+
+<div id="boot">
+  <div class="t">HEAD UP DISPLAY</div>
+  <div class="h">HUD</div>
+  <div class="s">GPS · GYRO · COMPASS</div>
+  <div class="box">
+    <button id="go">开始</button>
+    <div class="tip" id="tip">
+      需允许「位置」权限<br>
+      举机平视 · 双击切单位 · 长按校准俯仰
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+'use strict';
+
+/* ══════════════════ 基础 ══════════════════ */
+const DEG = Math.PI/180;
+/* ══════════════════ 主题 ══════════════════ */
+/* 目前内置两套：默认荧光绿、琥珀（老式军用 HUD 配色）。
+   后续要加仿机型主题时，往数组里追加一项即可，只需 id / label / color，
+   界面与画布都会自动跟随（CSS 用 --g / --rgb，画布用 GREEN）。 */
+const THEMES = [
+  { id:'default', label:'绿色', color:'#9dff3f' },
+  { id:'amber',   label:'琥珀', color:'#ffb02e' }
+];
+
+let GREEN = '#9dff3f';
+
+function hexToRgb(hex){
+  const n = parseInt(hex.slice(1), 16);
+  return ((n>>16)&255) + ',' + ((n>>8)&255) + ',' + (n&255);
+}
+
+function applyTheme(id){
+  let t = null;
+  for (let i=0;i<THEMES.length;i++) if (THEMES[i].id === id) t = THEMES[i];
+  if (!t) t = THEMES[0];
+
+  S.theme = t.id;
+  GREEN = t.color;
+
+  // 画布用 GREEN 变量，DOM 部分用 CSS 变量，两边同步
+  const root = document.documentElement.style;
+  root.setProperty('--g', t.color);
+  root.setProperty('--rgb', hexToRgb(t.color));
+
+  // 辉光层是 CSS filter，色相跟随即可
+  if (glow) glow.style.filter = 'blur(5px) saturate(1.35)';
+}
+const FONT = 'ui-monospace,"Roboto Mono",Menlo,Consolas,monospace';
+
+const hud  = document.getElementById('hud');
+const ctx  = hud.getContext('2d');
+const glow = document.getElementById('glow');
+const gctx = glow.getContext('2d');
+
+let W=0,H=0,AW=0,AH=0,DPR=1,U=0,FS=14,FSS=10,FSL=20,CX=0,CY=0;
+
+const clamp = (v,a,b)=> v<a?a:(v>b?b:v);
+const norm360 = d => ((d%360)+360)%360;
+const lerpAngle = (a,b,t)=>{ const d=((b-a+540)%360)-180; return norm360(a+d*t); };
+
+/* ══════════════════ 状态 ══════════════════ */
+const S = {
+  // 姿态（平滑后）
+  pitch:0, roll:0, heading:0,
+  // 目标
+  tPitch:0, tRoll:0, tHeading:null,
+  // 速度 kt / 高度 ft
+  spd:0, tSpd:0,
+  alt:0, tAlt:0,
+  // GPS
+  lat:null, lon:null, acc:0, course:null,
+  // 状态位
+  oriOK:false, gpsOK:false, simOri:false, simGPS:false,
+  hasFix:false, spdBuf:[], altBuf:[],
+  metric:false, started:false,
+  warm: 0, _warmed:false,
+  pitchOffset: 0, toast: null,
+  rotCSS: 0,                       // 软件横屏额外旋转角（0 / 90）
+  landOn: false,                   // 是否处于横屏
+  srcMode: 'accel',                // 'gps' | 'accel'（默认加速度）
+  mult: 10,                        // 速度倍率 1 / 10 / 100
+  baseSpd: 0,                      // 叠加的"一直向前"速度 m/s（0 / 10 / 100）
+  fwdHdg: null,                    // 前向矢量的方向（带惯性，不瞬间跟随机头）
+  turnRate: 0, _prevHdg: 0,        // 转向角速度（度/秒），用于生成转向侧滑
+  theme: 'default',                // 主题 id
+  // 加速度积分得到的世界系速度（m/s）
+  vE: 0, vN: 0, vU: 0,
+  accX: 0, accY: 0, accZ: 0,
+  bX: 0, bY: 0, bZ: 0,             // 零偏估计
+  motionOK: false, lastMotionT: 0,
+  altAccFt: 0, baseAltFt: 0,
+  R: [1,0,0, 0,1,0, 0,0,1],        // device→world 旋转矩阵（行优先）
+  vsFt: 0, tVsFt: 0, vsBuf: [], lastAltFt: 0, lastAltT: 0, gpsAltFt: 0,
+  fpa: 0, drift: 0,
+  startT:0, hdgOffset:0, hdgCalibrated:false,
+  lastOriT:0, lastGpsT:0, errMsg:''
+};
+
+/* ══════════════════ 尺寸 ══════════════════ */
+/* AW/AH = 画布实际像素外的 CSS 尺寸；W/H = 逻辑尺寸（软件横屏时互换） */
+function resize(){
+  AW = hud.clientWidth  || window.innerWidth;
+  AH = hud.clientHeight || window.innerHeight;
+
+  let d = Math.min(window.devicePixelRatio||1, 2);
+  if (AW*AH*d*d > 4.2e6) d = Math.max(1, Math.sqrt(4.2e6/(AW*AH)));
+  DPR = d;
+
+  [hud, glow].forEach(c=>{
+    c.width  = Math.round(AW*DPR);
+    c.height = Math.round(AH*DPR);
+  });
+
+  W = S.rotCSS ? AH : AW;
+  H = S.rotCSS ? AW : AH;
+
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  gctx.setTransform(DPR,0,0,DPR,0,0);
+  U  = Math.min(W,H);
+  FS = U*0.034; FSS = U*0.0255; FSL = U*0.050;
+  CX = W/2; CY = H/2;
+}
+window.addEventListener('resize', resize);
+window.addEventListener('orientationchange', ()=>setTimeout(resize,180));
+
+/* ══════════════════ 屏幕旋转角 ══════════════════ */
+function screenAngle(){
+  let base = 0;
+  if (screen && screen.orientation && typeof screen.orientation.angle === 'number')
+    base = screen.orientation.angle;
+  else if (typeof window.orientation === 'number')
+    base = norm360(window.orientation);
+  // 软件横屏时画面被额外转了 90°
+  return norm360(base + S.rotCSS);
+}
+
+/* ══════════════════ 姿态解算 ══════════════════ */
+/* 世界系: X=东 Y=北 Z=上。R 为 device→world 旋转矩阵 */
+function computeAttitude(alpha, beta, gamma, absolute){
+  const _x=beta*DEG, _y=gamma*DEG, _z=alpha*DEG;
+  const cX=Math.cos(_x), sX=Math.sin(_x);
+  const cY=Math.cos(_y), sY=Math.sin(_y);
+  const cZ=Math.cos(_z), sZ=Math.sin(_z);
+
+  // R = Rz(a)·Rx(b)·Ry(g)
+  const m11 = cZ*cY - sZ*sX*sY;
+  const m12 = -sZ*cX;
+  const m13 = cZ*sY + sZ*sX*cY;
+  const m21 = sZ*cY + cZ*sX*sY;
+  const m22 = cZ*cX;
+  const m23 = sZ*sY - cZ*sX*cY;
+  const m31 = -cX*sY;
+  const m32 = sX;
+  const m33 = cX*cY;
+
+  // 供加速度积分使用（设备系 → 世界系 X东 Y北 Z上）
+  S.R[0]=m11; S.R[1]=m12; S.R[2]=m13;
+  S.R[3]=m21; S.R[4]=m22; S.R[5]=m23;
+  S.R[6]=m31; S.R[7]=m32; S.R[8]=m33;
+
+  // 俯仰：屏幕法线(-z)的仰角
+  const pitch = Math.asin(clamp(-m33,-1,1))/DEG;
+
+  // 滚转：取「用户眼中的屏幕右方向」在竖直轴上的投影
+  // 横屏时该方向相对设备系旋转了 angle，故需按 angle 混合 x/y 分量
+  const sa = screenAngle()*DEG;
+  const rightZ = Math.cos(sa)*m31 - Math.sin(sa)*m32;
+  let roll = -Math.asin(clamp(rightZ,-1,1))/DEG;
+  if (roll !== roll) roll = 0;
+
+  // 航向：屏幕法线(-z)水平投影
+  const horiz = Math.hypot(m13, m23);
+  let hdg = null;
+  if (horiz > 0.18){
+    hdg = norm360(Math.atan2(-m13, -m23)/DEG);
+  }
+
+  // 非绝对角时，用 GPS 航迹角做零偏校准
+  if (hdg !== null && !absolute && !S.hdgCalibrated && S.course !== null && S.spd > 4){
+    S.hdgOffset = norm360(S.course - hdg);
+    S.hdgCalibrated = true;
+  }
+  if (hdg !== null) hdg = norm360(hdg + S.hdgOffset);
+
+  if (pitch === pitch) S.tPitch = clamp(pitch - S.pitchOffset, -45, 45);   // NaN 保护
+  if (roll  === roll ) S.tRoll  = clamp(roll, -85, 85);
+  if (hdg   !== null ) S.tHeading = hdg;
+}
+
+/* ══════════════════ 传感器接入 ══════════════════ */
+let absEventSeen = false;
+
+function onOri(e){
+  if (e.alpha == null && e.beta == null && e.gamma == null) return;
+  const b = e.beta==null?0:e.beta;
+  const g = e.gamma==null?0:e.gamma;
+  const a = e.alpha==null?0:e.alpha;
+  if (b===0 && g===0 && a===0) return;
+
+  S.oriOK = true;
+  S.simOri = false;
+  S.lastOriT = performance.now();
+
+  let absolute = (e.absolute === true) || absEventSeen;
+  let hdgOverride = null;
+  if (typeof e.webkitCompassHeading === 'number'){
+    hdgOverride = e.webkitCompassHeading;
+    absolute = true;
+  }
+  computeAttitude(a, b, g, absolute);
+  if (hdgOverride !== null) S.tHeading = hdgOverride;
+}
+
+function startOrientation(){
+  window.addEventListener('deviceorientationabsolute', e=>{
+    absEventSeen = true;
+    onOri(e);
+  }, true);
+  // 关键：一旦收到绝对角事件，就忽略相对角事件。
+  // 两者 beta/gamma 相同但 alpha 差一个偏移，混着用会让航向在两个值之间来回跳。
+  window.addEventListener('deviceorientation', e=>{
+    if (!absEventSeen) onOri(e);
+  }, true);
+}
+
+/* ══════════════════ 加速度传感器 ══════════════════ */
+function onMotion(e){
+  // 只用去重力后的线性加速度，含重力的版本没法直接积分
+  const a = e.acceleration;
+  if (!a || a.x == null || a.y == null || a.z == null) return;
+  S.accX = a.x; S.accY = a.y; S.accZ = a.z;
+  S.motionOK = true;
+  S.lastMotionT = performance.now();
+}
+
+function startMotion(){
+  if (typeof DeviceMotionEvent === 'undefined') return;
+  try{
+    if (typeof DeviceMotionEvent.requestPermission === 'function'){
+      DeviceMotionEvent.requestPermission().catch(()=>{});
+    }
+  }catch(e){}
+  window.addEventListener('devicemotion', onMotion, true);
+}
+
+/* 设备系线性加速度 → 世界系 → 积分成速度
+   注意：加速度积分只能反映速度"变化"，匀速时加速度为 0，所以必须配阻尼，
+   否则会无限漂移。阻尼 + 死区让它在停止晃动后自己归零。 */
+function integrateAccel(dt){
+  if (!S.motionOK) return;
+  const R = S.R;
+
+  // 零偏估计：慢速跟踪，扣掉传感器直流偏移
+  const kb = 1 - Math.exp(-dt*0.8);
+  S.bX += (S.accX - S.bX) * kb;
+  S.bY += (S.accY - S.bY) * kb;
+  S.bZ += (S.accZ - S.bZ) * kb;
+
+  const ax = S.accX - S.bX;
+  const ay = S.accY - S.bY;
+  const az = S.accZ - S.bZ;
+
+  const wx = R[0]*ax + R[1]*ay + R[2]*az;
+  const wy = R[3]*ax + R[4]*ay + R[5]*az;
+  const wz = R[6]*ax + R[7]*ay + R[8]*az;
+
+  S.vE += wx * dt;
+  S.vN += wy * dt;
+  S.vU += wz * dt;
+
+  const damp = Math.exp(-dt*0.9);
+  S.vE *= damp; S.vN *= damp; S.vU *= damp;
+
+  // 死区要小于单帧积分增量（A·dt），否则速度永远积累不起来
+  if (Math.hypot(S.vE, S.vN) < 0.01){ S.vE = 0; S.vN = 0; }
+  if (Math.abs(S.vU) < 0.01) S.vU = 0;
+}
+
+/* ══════════════════ GPS ══════════════════ */
+function haversine(a,b){
+  const R=6371000, K=Math.PI/180;
+  const dLat=(b.lat-a.lat)*K, dLon=(b.lon-a.lon)*K;
+  const s=Math.sin(dLat/2)**2 + Math.cos(a.lat*K)*Math.cos(b.lat*K)*Math.sin(dLon/2)**2;
+  return 2*R*Math.asin(Math.sqrt(Math.min(1,s)));
+}
+
+let prevFix = null;
+
+// 3 点中值：剔除 GPS 偶发的尖峰，再交给低通平滑
+function med3(buf, v){
+  buf.push(v);
+  if (buf.length > 3) buf.shift();
+  const s = buf.slice().sort(function(a,b){ return a-b; });
+  return s[s.length >> 1];
+}
+
+function startGPS(){
+  if (!navigator.geolocation){ S.hasFix = false; return; }
+  let firstFail = true;
+
+  navigator.geolocation.watchPosition(pos=>{
+    const c = pos.coords;
+    S.hasFix = true;
+    S.lastGpsT = performance.now();
+    S.simGPS = false;
+    S.lat = c.latitude; S.lon = c.longitude;
+    S.acc = c.accuracy || 0;
+
+    // 速度 m/s → kt
+    let v = c.speed;
+    if (v == null || isNaN(v)){
+      if (prevFix){
+        const dt = (pos.timestamp - prevFix.t)/1000;
+        if (dt > 0.5){
+          const d = haversine(prevFix, { lat:c.latitude, lon:c.longitude });
+          if (d > 0.5) v = d/dt;   // <0.5m 的位移是噪声，忽略
+        }
+      }
+    }
+    // 1080 km/h 以上肯定是异常值
+    if (v != null && !isNaN(v) && v >= 0 && v < 300){
+      S.tSpd = med3(S.spdBuf, v*1.94384);
+    }
+
+    // 高度 m → ft；水平精度差时高度不可信，直接不用
+    if (c.altitude != null && !isNaN(c.altitude) && (S.acc === 0 || S.acc < 50)){
+      const altFt = c.altitude*3.28084;
+      // 由高度变化率推垂直速度，供飞行路径矢量使用
+      if (S.lastAltT && pos.timestamp > S.lastAltT){
+        const dtA = (pos.timestamp - S.lastAltT)/1000;
+        if (dtA > 0.5 && dtA < 12){
+          const raw = (altFt - S.lastAltFt)/dtA;   // ft/s
+          if (Math.abs(raw) < 120) S.tVsFt = med3(S.vsBuf, raw);
+        }
+      }
+      S.lastAltFt = altFt;
+      S.lastAltT = pos.timestamp;
+      S.gpsAltFt = altFt;
+      S.tAlt = med3(S.altBuf, altFt);
+    }
+
+    if (c.heading != null && !isNaN(c.heading) && (v||0) > 1.2) S.course = c.heading;
+
+    prevFix = { t: pos.timestamp, lat:c.latitude, lon:c.longitude };
+  }, err=>{
+    S.hasFix = false;
+    if (firstFail){
+      firstFail = false;
+      S.errMsg = err.code === 1 ? 'GPS 权限被拒绝' : 'GPS 不可用';
+    }
+  }, { enableHighAccuracy:true, maximumAge:800, timeout:12000 });
+}
+
+/* ══════════════════ 模拟（无传感器时） ══════════════════ */
+function simOrientation(t){
+  const s = t/1000;
+  S.simOri = true;
+  S.tPitch = Math.sin(s*0.43)*11 + Math.sin(s*0.17+1.3)*5;
+  S.tRoll  = Math.sin(s*0.31)*24 + Math.sin(s*0.73+0.7)*6;
+  S.tHeading = norm360(s*7.5 + Math.sin(s*0.23)*18);
+}
+function simGPS(t, dt){
+  if (!S.simGPS) toast('演示数据 · 未获取到 GPS', 4000);
+  const s = t/1000;
+  S.simGPS = true;
+  S.tSpd = 318 + Math.sin(s*0.19)*38 + Math.sin(s*0.81)*6;
+  S.tAlt = 24650 + Math.sin(s*0.05)*600 + Math.sin(s*0.31)*80;
+  // 高度曲线的导数（ft/s），量级贴近真实爬升率
+  S.tVsFt = Math.cos(s*0.05)*30 + Math.cos(s*0.31)*24.8;
+  // 航迹基本跟随航向，只留少量侧风偏流
+  S.course = norm360((S.heading||0) + Math.sin(s*0.3)*4);
+  S.lat = 22.5432 + Math.sin(s*0.01)*0.004;
+  S.lon = 114.0567 + Math.cos(s*0.01)*0.004;
+  S.acc = 4;
+}
+
+/* ══════════════════ 更新 ══════════════════ */
+// 一阶低通 + 死区：小于 dead 的偏差完全不动，避免静止时读数抖动
+function approach(cur, target, k, dead){
+  const d = target - cur;
+  if (dead && Math.abs(d) < dead) return cur;
+  return cur + d*k;
+}
+
+function update(dt, now){
+  // 确定性预热（用于截图/演示：?warm=秒）
+  if (S.warm > 0 && !S._warmed){
+    S._warmed = true;
+    const w = S.startT + S.warm*1000;
+    simOrientation(w);
+    S.pitch = S.tPitch; S.roll = S.tRoll;
+    if (S.tHeading !== null){ S.heading = S.tHeading; S._hInit = true; }
+    simGPS(w, 1);            // 必须在 heading 就绪后调用，否则 course 与航向差 90°
+    S.spd = S.tSpd; S.alt = S.tAlt;
+    S.baseAltFt = S.tAlt;
+    S.vsFt = S.tVsFt; S.fpa = S.pitch; S.drift = 0;
+    toast('演示数据 · DEMO', 8000);
+  }
+
+  const el = now - S.startT;
+
+  // GPS 超过 6 秒没有新定位就算失效（不要在这时切模拟，数据会突然跳）
+  S.gpsOK = S.hasFix && (now - S.lastGpsT < 6000);
+
+  if (!S.oriOK && el > 2000) simOrientation(now);
+  // 只有从未拿到过定位时才用模拟数据，避免真实/模拟来回切换造成跳变
+  if (S.srcMode === 'gps' && !S.hasFix && el > 3600) simGPS(now, dt);
+
+  // 加速度模式：用积分速度替换 GPS 的速度与升降
+  if (S.srcMode === 'accel'){
+    integrateAccel(dt);
+
+    // 启动时若 GPS 已有绝对高度，用它当基准；否则从 0 起算相对高度
+    if (!S.baseAltFt && S.gpsAltFt > 1000) S.baseAltFt = S.gpsAltFt;
+
+    // 无加速度数据时给个提示（只在完全收不到事件时）
+    if (!S.motionOK && el > 3500 && !S._motTip){
+      S._motTip = true;
+      toast('未收到加速度数据', 3500);
+    }
+
+    // 前向矢量基本随同机头（只留极小的余隙，避免高频抖动直接透传）
+    if (S.fwdHdg === null) S.fwdHdg = S.heading;
+    S.fwdHdg = lerpAngle(S.fwdHdg, S.heading, 1 - Math.exp(-dt*8));
+
+    // 叠加：传感器速度（乘倍率）+ 沿前向矢量方向的固定速度
+    const hRad = S.fwdHdg * DEG;
+    const eE = S.vE * S.mult + Math.sin(hRad) * S.baseSpd;
+    const eN = S.vN * S.mult + Math.cos(hRad) * S.baseSpd;
+    const spMS = Math.hypot(eE, eN);
+
+    S.tSpd = spMS * 1.94384;
+    S.tVsFt = S.vU * 3.28084 * S.mult;
+    if (spMS > 0.03) S.course = norm360(Math.atan2(eE, eN)/DEG);
+
+    S.altAccFt += S.vU * 3.28084 * dt * S.mult;
+    S.altAccFt *= Math.exp(-dt*0.03);        // 30 秒缓慢回零，避免长期漂移
+    S.tAlt = S.baseAltFt + S.altAccFt;
+  }
+
+  const kA = 1 - Math.exp(-dt*9);    // 姿态
+  const kD = 1 - Math.exp(-dt*6);    // 航向（磁力计噪声大，比姿态稍慢）
+  const kV = 1 - Math.exp(-dt*1.2);  // 速度
+  const kH = 1 - Math.exp(-dt*0.6);  // 高度
+
+  // 姿态防跳：单帧突变超过 25° 视为传感器奇异点(万向节锁)抖动，丢弃该帧
+  if (Math.abs(S.tPitch - S.pitch) < 25 && Math.abs(S.tRoll - S.roll) < 25){
+    S.pitch = approach(S.pitch, S.tPitch, kA, 0.05);
+    S.roll  = approach(S.roll,  S.tRoll,  kA, 0.05);
+  }
+  if (S.tHeading !== null){
+    if (!S._hInit){ S.heading = S.tHeading; S._hInit = true; }
+    const diff = ((S.tHeading - S.heading + 540) % 360) - 180;
+    if (Math.abs(diff) > 0.3) S.heading = norm360(S.heading + diff*kD);
+  }
+
+  // 转向角速度（度/秒）：用来直接生成侧滑量。
+  // 靠低通惯性制造偏流会明显发飘，而用转向率算出来的侧滑是实时的——
+  // 一转手就出现，停手立刻回中，跟俯仰的响应速度一致。
+  const dHdg = ((S.heading - S._prevHdg + 540) % 360) - 180;
+  S._prevHdg = S.heading;
+  const rate = (dt > 0.001) ? dHdg/dt : 0;
+  S.turnRate += (rate - S.turnRate) * (1 - Math.exp(-dt*10));
+
+  S.spd = approach(S.spd, S.tSpd, kV, 0.15);
+  S.alt = approach(S.alt, S.tAlt, kH, 3);
+  S.vsFt += (S.tVsFt - S.vsFt) * (1 - Math.exp(-dt*0.5));
+
+  // 飞行路径矢量的两个分量：航迹仰角、偏流角
+  const gsFts = S.spd * 1.6878;
+  const minGs = S.srcMode === 'accel' ? 8 : 40;
+  const minVs = S.srcMode === 'accel' ? 1.5 : 3;
+  let fpaT = S.pitch;
+  if (gsFts > minGs && Math.abs(S.vsFt) > minVs){
+    fpaT = clamp(Math.atan2(S.vsFt, gsFts)/DEG, -20, 20);
+  }
+  S.fpa += (fpaT - S.fpa) * (1 - Math.exp(-dt*1.5));
+
+  let driftT = 0;
+  if (S.course != null) driftT = ((S.course - S.heading + 540) % 360) - 180;
+  // 转弯时的侧滑：转得越快，速度矢量越跟不上机头
+  driftT -= clamp(S.turnRate * 0.06, -20, 20);
+  driftT = clamp(driftT, -30, 30);
+  S.drift += (driftT - S.drift) * (1 - Math.exp(-dt*10));
+}
+
+function toast(text, ms){
+  S.toast = { text: text, until: performance.now() + (ms||1600) };
+}
+
+function drawToast(){
+  if (!S.toast) return;
+  if (performance.now() > S.toast.until){ S.toast = null; return; }
+  ctx.save();
+  ctx.font = '700 '+(FS*0.9).toFixed(1)+'px '+FONT;
+  const tw = ctx.measureText(S.toast.text).width;
+  const bw = tw + U*0.07, bh = FS*2.1;
+  ctx.fillStyle = '#000';
+  ctx.globalAlpha = 0.9;
+  ctx.fillRect(CX-bw/2, H*0.635-bh/2, bw, bh);
+  ctx.globalAlpha = 1;
+  ctx.strokeStyle = GREEN;
+  ctx.lineWidth = 1.2;
+  ctx.strokeRect(CX-bw/2+0.6, H*0.635-bh/2+0.6, bw-1.2, bh-1.2);
+  ctx.fillStyle = GREEN;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(S.toast.text, CX, H*0.635);
+  ctx.restore();
+}
+
+/* ══════════════════ 绘制 ══════════════════ */
+function render(){
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  ctx.clearRect(0,0,AW,AH);
+  if (S.rotCSS){
+    // 软件横屏：把逻辑坐标系顺时针转 90°
+    ctx.translate(AW, 0);
+    ctx.rotate(Math.PI/2);
+  }
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0,0,W,H);
+
+  drawLadder();
+  drawFPV();
+  drawBoresight();
+  drawSpeedTape();
+  drawAltTape();
+  drawHdgTape();
+  drawTop();
+  drawCorners();
+  drawToast();
+
+  if (DBG){
+    document.title = JSON.stringify({
+      W:Math.round(W), H:Math.round(H), U:Math.round(U), DPR:DPR.toFixed(2),
+      tapeR:Math.round(W-(U*0.158+U*0.024)),
+      boxW:Math.round(U*0.158),
+      alt:Math.round(S.alt), spd:Math.round(S.spd),
+      pitch:S.pitch.toFixed(1), roll:S.roll.toFixed(1), hdg:Math.round(S.heading)
+    });
+  }
+}
+const DBG = /[?&]debug/.test(location.search);
+if (DBG){
+  window.__S = S;
+  // 手动步进，便于在无头环境测试平滑逻辑（rAF 会被节流）
+  window.__tick = function(dt){ update(dt || 0.016, performance.now()); };
+  window.__resize = resize;
+  window.__theme = applyTheme;
+}
+
+/* ---- 俯仰梯 ---- */
+function ladderTransform(){
+  const ppd = H/52;
+  ctx.translate(CX, CY);
+  ctx.rotate(-S.roll*DEG);
+  ctx.translate(0, S.pitch*ppd);
+}
+
+function drawLadder(){
+  const ppd = H/52;   // 每度像素（视野约 ±25°）
+
+  // 中央可视带（两侧滚动带之间）
+  const boxW = U*0.158, pad = U*0.024;
+  const clipX1 = boxW + pad + U*0.028;
+  const clipX2 = W - boxW - pad - U*0.028;
+  const clipY1 = H*0.155, clipY2 = H*0.805;
+  const clipHalf = (clipX2-clipX1)/2;
+  const halfL = Math.max(U*0.07, Math.min(clipHalf - FSS*5.5, H*0.30));
+
+  /* --- 非零刻度：裁剪在中央带内 --- */
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(clipX1, clipY1, clipX2-clipX1, clipY2-clipY1);
+  ctx.clip();
+
+  ctx.save();
+  ladderTransform();
+  ctx.strokeStyle = GREEN;
+  ctx.fillStyle   = GREEN;
+  ctx.textBaseline= 'middle';
+  ctx.lineWidth   = 1.35;
+  ctx.font = '600 '+FSS.toFixed(1)+'px '+FONT;
+
+  for (let a=-30; a<=30; a+=5){
+    if (a === 0) continue;
+    const y = -a*ppd;
+    if (Math.abs(y) > H*0.62) continue;
+    const major = (a % 10 === 0);
+    const len = major ? halfL : halfL*0.55;
+
+    ctx.globalAlpha = major ? 0.92 : 0.5;
+    ctx.beginPath();
+    ctx.moveTo(-len, y); ctx.lineTo(len, y);
+    ctx.stroke();
+
+    const tick = major ? FSS*0.55 : FSS*0.35;
+    const d = a > 0 ? tick : -tick;
+    ctx.beginPath();
+    ctx.moveTo(-len, y); ctx.lineTo(-len, y + d);
+    ctx.moveTo( len, y); ctx.lineTo( len, y + d);
+    ctx.stroke();
+
+    if (major && Math.abs(a) <= 20){
+      const txt = String(Math.abs(a));
+      ctx.globalAlpha = 0.95;
+      if (a > 0){
+        ctx.textAlign = 'left';
+        ctx.fillText(txt, len + FSS*0.55, y);
+      } else {
+        ctx.textAlign = 'right';
+        ctx.fillText(txt, -len - FSS*0.55, y);
+      }
+    }
+  }
+  ctx.restore();
+  ctx.restore();
+
+  /* --- 地平线：全宽贯穿，两侧压暗避免干扰读数 --- */
+  const gap = U*0.135;
+  const len = Math.max(W*0.60, H*0.72);
+
+  // 两侧淡线（限制在中央带高度内，避免扫到顶部状态与底部航向带）
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, clipY1, W, clipY2-clipY1);
+  ctx.clip();
+  ladderTransform();
+  ctx.strokeStyle = GREEN;
+  ctx.lineWidth   = 1.5;
+  ctx.globalAlpha = 0.18;
+  ctx.beginPath();
+  ctx.moveTo(-len, 0); ctx.lineTo(-gap, 0);
+  ctx.moveTo( gap, 0); ctx.lineTo( len, 0);
+  ctx.stroke();
+  ctx.restore();
+
+  // 中央亮段（屏幕坐标裁剪后再变换）
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(clipX1, clipY1, clipX2-clipX1, clipY2-clipY1);
+  ctx.clip();
+  ladderTransform();
+  ctx.strokeStyle = GREEN;
+  ctx.lineWidth   = 1.5;
+  ctx.globalAlpha = 1;
+  ctx.beginPath();
+  ctx.moveTo(-len, 0); ctx.lineTo(-gap, 0);
+  ctx.moveTo( gap, 0); ctx.lineTo( len, 0);
+  ctx.stroke();
+  ctx.restore();
+}
+
+/* ---- 飞行路径矢量（速度矢量点） ---- */
+function drawFPV(){
+  // 加速度模式下速度本身只有几节，门槛按模式区分
+  const minKt = S.srcMode === 'accel' ? 0.8 : 25;
+  if (S.spd < minKt) return;
+
+  const ppd = H/52;
+
+  // 在俯仰梯坐标系里定位，再按滚转旋转回屏幕坐标
+  const lx = S.drift * ppd;
+  const ly = (S.pitch - S.fpa) * ppd;
+  const rad = -S.roll*DEG;
+
+  const r = Math.max(5.5, U*0.017);
+  let fx = CX + lx*Math.cos(rad) - ly*Math.sin(rad);
+  let fy = CY + lx*Math.sin(rad) + ly*Math.cos(rad);
+
+  if (S.srcMode === 'accel'){
+    // 加速度模式：速度方向随机性大，保证符号始终可见，贴边即表示偏离很大
+    fx = clamp(fx, r*2.4, W - r*2.4);
+    fy = clamp(fy, r*2.4, H - r*2.4);
+  } else {
+    // GPS 模式：速度矢量偏出视野就不画（真实 HUD 也是这样）
+    if (fx < r*2.4 || fx > W - r*2.4 || fy < r*2.4 || fy > H - r*2.4) return;
+  }
+
+  ctx.save();
+  ctx.strokeStyle = GREEN;
+  ctx.lineWidth = 1.7;
+  ctx.lineCap = 'round';
+
+  // 圆环
+  ctx.beginPath();
+  ctx.arc(fx, fy, r, 0, Math.PI*2);
+  ctx.stroke();
+
+  // 两侧短翼 + 端头上翘
+  ctx.beginPath();
+  ctx.moveTo(fx - r, fy);          ctx.lineTo(fx - r*2.1, fy);
+  ctx.moveTo(fx + r, fy);          ctx.lineTo(fx + r*2.1, fy);
+  ctx.moveTo(fx - r*2.1, fy);      ctx.lineTo(fx - r*2.1, fy - r*0.9);
+  ctx.moveTo(fx + r*2.1, fy);      ctx.lineTo(fx + r*2.1, fy - r*0.9);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+/* ---- 机头水线符号 ---- */function drawBoresight(){
+  const g = U*0.036;
+  ctx.save();
+  ctx.strokeStyle = GREEN;
+  ctx.lineWidth = Math.max(1.8, U*0.0058);
+  ctx.lineCap = 'round';
+
+  ctx.beginPath();
+  ctx.moveTo(CX-3.4*g, CY); ctx.lineTo(CX-1.4*g, CY);
+  ctx.moveTo(CX+1.4*g, CY); ctx.lineTo(CX+3.4*g, CY);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.arc(CX, CY, Math.max(2.6, U*0.011), 0, Math.PI*2);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(CX, CY + U*0.021);
+  ctx.lineTo(CX, CY + U*0.034);
+  ctx.stroke();
+  ctx.restore();
+}
+
+/* ---- 垂直滚动带 ---- */
+function drawTape(side, value, majorStep, minorStep, fmt, unitLabel){
+  const halfH  = H*0.205;
+  const stepPx = H*0.0425;
+  const ppu    = stepPx/majorStep;
+  const boxW   = U*0.158;
+  // 轴线位置：读数框与数字都朝屏幕边缘，中间区域留给俯仰梯
+  const pad = U*0.024;
+  const x = side==='L'
+    ? boxW + pad
+    : W - boxW - pad;
+  const dir = side==='L' ? -1 : 1;   // 刻度朝边缘
+  const top = CY-halfH, bot = CY+halfH;
+
+  ctx.save();
+  ctx.strokeStyle = GREEN;
+  ctx.fillStyle   = GREEN;
+  ctx.textBaseline= 'middle';
+  ctx.lineWidth   = 1.3;
+
+  // 主轴线
+  ctx.globalAlpha = 0.85;
+  ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, bot); ctx.stroke();
+
+  // 刻度
+  ctx.font = '600 '+FSS.toFixed(1)+'px '+FONT;
+  const v0 = Math.floor((value - halfH/ppu)/minorStep)*minorStep;
+  const v1 = value + halfH/ppu;
+
+  for (let v = v0; v <= v1; v += minorStep){
+    // 速度不可能为负，低速度时不要画出负刻度
+    if (side === 'L' && v < -0.01) continue;
+    const y = CY - (v - value)*ppu;
+    if (y < top-1 || y > bot+1) continue;
+    const isMajor = Math.abs(v/majorStep - Math.round(v/majorStep)) < 1e-6;
+    const len = isMajor ? U*0.036 : U*0.021;
+
+    ctx.globalAlpha = isMajor ? 0.95 : 0.48;
+    ctx.lineWidth = 1.3;
+    ctx.strokeStyle = GREEN;
+    ctx.beginPath();
+    ctx.moveTo(x, y); ctx.lineTo(x + dir*len, y);
+    ctx.stroke();
+
+    if (isMajor){
+      ctx.textAlign = side==='L' ? 'right' : 'left';
+      const tx = x + dir*(len + FSS*0.55);
+      const label = fmt(v);
+      const tw = ctx.measureText(label).width;
+      const th = FSS*1.2;
+      // 黑色底衬：地平线穿过时数字依旧干净
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = '#000';
+      ctx.fillRect(side==='L' ? tx-tw-2 : tx-2, y-th/2, tw+4, th);
+      ctx.fillStyle = GREEN;
+      ctx.globalAlpha = 0.92;
+      ctx.fillText(label, tx, y);
+    }
+  }
+
+  // 中央读数框（贴在屏幕边缘一侧，不压标签）
+  const boxH = FS*1.9;
+  const bx = side==='L' ? x - boxW : x;
+  const by = CY - boxH/2;
+
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = '#000';
+  ctx.fillRect(bx, by, boxW, boxH);  ctx.strokeStyle = GREEN;
+  ctx.lineWidth = 1.6;
+  ctx.strokeRect(bx+0.8, by+0.8, boxW-1.6, boxH-1.6);
+
+  ctx.fillStyle = GREEN;
+  ctx.textAlign = 'center';
+  ctx.font = '700 '+(FS*0.94).toFixed(1)+'px '+FONT;
+  ctx.fillText(fmt(value), bx+boxW/2, CY+0.5);
+
+  // 单位（放在带子顶端，避免压住刻度数字）
+  ctx.font = '600 '+(FSS*0.85).toFixed(1)+'px '+FONT;
+  ctx.globalAlpha = 0.6;
+  ctx.textAlign = 'center';
+  ctx.fillText(unitLabel, bx+boxW/2, top - FSS*1.4);
+
+  // 带子端点
+  ctx.globalAlpha = 0.3;
+  ctx.lineWidth = 1.1;
+  ctx.beginPath();
+  ctx.moveTo(x+dir*U*0.036, top); ctx.lineTo(x, top);
+  ctx.moveTo(x+dir*U*0.036, bot); ctx.lineTo(x, bot);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+const SPEED_UNIT = ()=> S.metric ? 'KM/H' : 'KT';
+const ALT_UNIT   = ()=> S.metric ? 'M' : 'FT';
+const kn2disp = kt => S.metric ? kt*1.852 : kt;
+const ft2disp = ft => S.metric ? ft*0.3048 : ft;
+
+function drawSpeedTape(){
+  const v = kn2disp(S.spd);
+  drawTape('L', v, S.metric?20:10, S.metric?10:5,
+    x=>String(Math.round(x)), SPEED_UNIT());
+}
+function drawAltTape(){
+  const v = ft2disp(S.alt);
+  drawTape('R', v, 100, 50, x=>String(Math.round(x)), ALT_UNIT());
+}
+
+/* ---- 航向带 ---- */
+function drawHdgTape(){
+  const y0 = H*0.855;
+  const halfW = Math.min(W*0.38, H*0.46);
+  const spanDeg = 30;
+  const pxPerDeg = halfW/spanDeg;
+
+  ctx.save();
+  ctx.strokeStyle = GREEN;
+  ctx.fillStyle   = GREEN;
+  ctx.textAlign   = 'center';
+  ctx.textBaseline= 'middle';
+  ctx.lineWidth   = 1.3;
+  ctx.font = '600 '+FSS.toFixed(1)+'px '+FONT;
+
+  ctx.globalAlpha = 0.8;
+  ctx.beginPath();
+  ctx.moveTo(CX-halfW, y0); ctx.lineTo(CX+halfW, y0);
+  ctx.stroke();
+
+  const h = S.heading;
+  const from = Math.floor((h-spanDeg)/5)*5;
+  for (let d = from; d <= h+spanDeg; d += 5){
+    const x = CX + (d-h)*pxPerDeg;
+    if (x < CX-halfW-1 || x > CX+halfW+1) continue;
+    const dd = norm360(d);
+    const major = Math.abs(dd % 10) < 1e-6;
+    ctx.globalAlpha = major ? 0.95 : 0.45;
+    ctx.beginPath();
+    ctx.moveTo(x, y0);
+    ctx.lineTo(x, y0 + (major ? U*0.030 : U*0.016));
+    ctx.stroke();
+    if (major){
+      ctx.globalAlpha = 0.9;
+      ctx.fillText(String(Math.round(dd/10)).padStart(2,'0'),
+                   x, y0 + U*0.030 + FSS*0.95);
+    }
+  }
+
+  // 中央指针
+  ctx.globalAlpha = 1;
+  ctx.beginPath();
+  ctx.moveTo(CX, y0 - U*0.009);
+  ctx.lineTo(CX - U*0.019, y0 - U*0.040);
+  ctx.lineTo(CX + U*0.019, y0 - U*0.040);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.restore();
+}
+
+/* ---- 顶部 ---- */
+function drawTop(){
+  ctx.save();
+  ctx.fillStyle = GREEN;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  const hdg = Math.round(S.heading) % 360;
+  const txt = String(hdg).padStart(3,'0');
+
+  ctx.font = '700 '+FSL.toFixed(1)+'px '+FONT;
+  ctx.globalAlpha = 1;
+  ctx.lineWidth = Math.max(3, FSL*0.22);
+  ctx.strokeStyle = '#000';
+  ctx.lineJoin = 'round';
+  ctx.strokeText(txt, CX, H*0.105);
+  ctx.fillText(txt, CX, H*0.105);
+
+  ctx.font = '600 '+(FSS*0.85).toFixed(1)+'px '+FONT;
+  ctx.globalAlpha = 0.5;
+  ctx.fillText('HDG', CX, H*0.105 - FSL*0.92);
+
+  // 状态行
+  ctx.font = '600 '+(FSS*0.9).toFixed(1)+'px '+FONT;
+  ctx.textBaseline = 'middle';
+  const yTop = H*0.042;
+
+  ctx.textAlign = 'left';
+  ctx.globalAlpha = 1;
+  if (S.srcMode === 'accel'){
+    ctx.fillText('ACC', W*0.045, yTop);
+    ctx.globalAlpha = S.motionOK ? 1 : 0.35;
+    ctx.fillText('×' + S.mult, W*0.045 + FSS*2.6, yTop);
+  } else {
+    ctx.fillText('GPS', W*0.045, yTop);
+    const gOk = S.gpsOK && !S.simGPS;
+    ctx.globalAlpha = gOk ? 1 : (S.simGPS ? 0.85 : 0.35);
+    const gTxt = S.gpsOK ? 'LOCK' : (S.simGPS ? 'SIM' : (S.hasFix ? 'LOST' : '----'));
+    ctx.fillText(gTxt, W*0.045 + FSS*2.6, yTop);
+  }
+
+  ctx.textAlign = 'right';
+  ctx.globalAlpha = 1;
+  const oOk = S.oriOK && !S.simOri;
+  ctx.fillText(oOk ? 'GYRO' : 'DEMO', W*0.955, yTop);
+  ctx.globalAlpha = 0.35;
+  ctx.fillText(S.metric ? 'MET' : 'IMP', W*0.955 - FSS*4.2, yTop);
+
+  ctx.restore();
+}
+
+/* ---- 四角信息 ---- */
+function drawCorners(){
+  ctx.save();
+  ctx.fillStyle = GREEN;
+  ctx.font = '600 '+(FSS*0.92).toFixed(1)+'px '+FONT;
+  ctx.textBaseline = 'middle';
+
+  const y1 = H*0.735, y2 = y1 + FSS*1.7;
+
+  // 左下：经纬度
+  ctx.textAlign = 'left';
+  ctx.globalAlpha = 0.55;
+  const la = S.lat==null ? '--.-----' : Math.abs(S.lat).toFixed(5);
+  const lo = S.lon==null ? '---.-----' : Math.abs(S.lon).toFixed(5);
+  ctx.fillText((S.lat==null?'N':'N ').slice(0,1)+' '+la, W*0.045, y1);
+  ctx.fillText('E '+lo, W*0.045, y2);
+
+  // 右下：精度 / 地速
+  ctx.textAlign = 'right';
+  ctx.fillText('ACC '+(S.acc?('±'+Math.round(S.acc)+'M'):'--'), W*0.955, y1);
+  const gs = Math.round(kn2disp(S.spd));
+  ctx.fillText('GS '+gs+' '+(S.metric?'KPH':'KT'), W*0.955, y2);
+
+  ctx.restore();
+}
+
+/* ══════════════════ 主循环 ══════════════════ */
+let lastT = 0;
+function frame(){
+  requestAnimationFrame(frame);
+  // 视口自检：地址栏收起/旋转/无头环境都可能不触发 resize 事件
+  // 要和实际尺寸比，不能用逻辑尺寸（软件横屏时两者互换）
+  if (hud.clientWidth !== AW || hud.clientHeight !== AH) resize();
+
+  const now = performance.now();
+  const dt = lastT ? Math.min((now-lastT)/1000, 0.05) : 0.016;
+  lastT = now;
+
+  update(dt, now);
+  render();
+
+  // 辉光层
+  gctx.setTransform(1,0,0,1,0,0);
+  gctx.clearRect(0,0,glow.width,glow.height);
+  gctx.drawImage(hud, 0, 0);
+}
+
+/* ══════════════════ 启动 ══════════════════ */
+const boot = document.getElementById('boot');
+const goBtn = document.getElementById('go');
+
+async function start(){
+  if (S.started) return;
+  S.started = true;
+  S.startT = performance.now();
+
+  // 先让界面立即响应，权限请求不阻塞渲染
+  boot.classList.add('hide');
+  setTimeout(()=>{ boot.style.display='none'; }, 500);
+
+  const fire = fn => { try { const r = fn(); if (r && typeof r.catch === 'function') r.catch(()=>{}); } catch(e){} };
+
+  // iOS 13+ 传感器授权（必须在用户手势调用栈内发起）
+  try{
+    if (typeof DeviceOrientationEvent !== 'undefined' &&
+        typeof DeviceOrientationEvent.requestPermission === 'function'){
+      DeviceOrientationEvent.requestPermission().catch(()=>{});
+    }
+  }catch(e){}
+
+  startOrientation();
+  startMotion();
+  startGPS();
+
+  fire(()=> document.documentElement.requestFullscreen());
+  fire(()=> navigator.wakeLock ? navigator.wakeLock.request('screen') : null);
+}
+
+goBtn.addEventListener('click', ()=>{ start(); });
+
+/* ══════════════════ 设置菜单 ══════════════════ */
+const gearBtn = document.getElementById('gear');
+const menuEl  = document.getElementById('menu');
+
+let gearTimer = null;
+
+function showGear(){
+  gearBtn.classList.add('show');
+  clearTimeout(gearTimer);
+  gearTimer = setTimeout(()=> gearBtn.classList.remove('show'), 3000);
+}
+function hideGear(){
+  clearTimeout(gearTimer);
+  gearBtn.classList.remove('show');
+}
+
+function syncMenu(){
+  document.querySelectorAll('#segSrc button').forEach(function(b){
+    b.classList.toggle('on', b.dataset.src === S.srcMode);
+  });
+  document.querySelectorAll('#segRot button').forEach(function(b){
+    b.classList.toggle('on', (b.dataset.rot === '1') === S.landOn);
+  });
+  document.querySelectorAll('#segMult button').forEach(function(b){
+    b.classList.toggle('on', Number(b.dataset.mult) === S.mult);
+  });
+  document.querySelectorAll('#segFwd button').forEach(function(b){
+    b.classList.toggle('on', Number(b.dataset.fwd) === S.baseSpd);
+  });
+  document.querySelectorAll('#segTheme button').forEach(function(b){
+    b.classList.toggle('on', b.dataset.theme === S.theme);
+  });
+  document.querySelectorAll('#segUnit button').forEach(function(b){
+    b.classList.toggle('on', (b.dataset.unit === 'met') === S.metric);
+  });
+
+  // 倍率与前向速度只对加速度模式有意义，GPS 模式下整行变暗且不可点
+  const gpsOff = (S.srcMode === 'gps');
+  ['segMult','segFwd'].forEach(function(id){
+    const el = document.getElementById(id);
+    const row = el && el.closest('.row');
+    if (row) row.classList.toggle('disabled', gpsOff);
+  });
+}
+
+function openMenu(){ hideGear(); syncMenu(); menuEl.classList.add('show'); }
+function closeMenu(){ menuEl.classList.remove('show'); }
+
+gearBtn.addEventListener('click', function(e){ e.stopPropagation(); openMenu(); });
+document.getElementById('closeMenu').addEventListener('click', closeMenu);
+menuEl.addEventListener('click', function(e){ if (e.target === menuEl) closeMenu(); });
+
+/* ---- 数据源切换 ---- */
+function setSource(mode){
+  if (S.srcMode === mode) return;
+  S.srcMode = mode;
+  if (mode === 'accel'){
+    S.vE = S.vN = S.vU = 0;
+    S.bX = S.bY = S.bZ = 0;
+    S.baseAltFt = S.alt;
+    S.altAccFt = 0;
+    S.fwdHdg = null;
+    toast(S.motionOK ? ('加速度模式 ×' + S.mult) : '无加速度传感器');
+  } else {
+    S.baseSpd = 0;                 // GPS 模式下前向速度锁定为 0
+    S.fwdHdg = null;
+    toast('GPS 模式');
+  }
+  syncMenu();
+}
+
+document.getElementById('segSrc').addEventListener('click', function(e){
+  const b = e.target.closest('button');
+  if (b) setSource(b.dataset.src);
+});
+
+/* ---- 速度倍率 ---- */
+function setMult(m){
+  S.mult = m;
+  S.baseAltFt = S.alt;   // 换倍率时重置高度基准，避免瞬间跳变
+  S.altAccFt = 0;
+  toast('速度倍率 ×' + m);
+  syncMenu();
+}
+
+document.getElementById('segMult').addEventListener('click', function(e){
+  const b = e.target.closest('button');
+  if (b) setMult(Number(b.dataset.mult));
+});
+
+/* ---- 前向速度（叠加一个恒定向前矢量，模拟一直在飞） ---- */
+document.getElementById('segFwd').addEventListener('click', function(e){
+  const b = e.target.closest('button');
+  if (!b) return;
+  S.baseSpd = Number(b.dataset.fwd);
+  toast('前向速度 ' + S.baseSpd + ' m/s');
+  syncMenu();
+});
+
+/* ---- 主题 ---- */
+function renderThemes(){
+  const box = document.getElementById('segTheme');
+  box.innerHTML = THEMES.map(function(t){
+    return '<button data-theme="' + t.id + '">' + t.label + '</button>';
+  }).join('');
+}
+
+document.getElementById('segTheme').addEventListener('click', function(e){
+  const b = e.target.closest('button');
+  if (!b) return;
+  applyTheme(b.dataset.theme);
+  syncMenu();
+});
+
+/* ---- 单位 ---- */
+document.getElementById('segUnit').addEventListener('click', function(e){
+  const b = e.target.closest('button');
+  if (!b) return;
+  S.metric = (b.dataset.unit === 'met');
+  syncMenu();
+});
+
+/* ---- 横屏 ---- */
+function setRot(css){
+  S.rotCSS = css;
+  resize();
+}
+
+async function setLandscape(on){
+  if (S.landOn === on) return;
+  S.landOn = on;
+
+  if (on){
+    // 优先走系统方向锁（真横屏，布局与传感器都正确）
+    try{
+      if (!document.fullscreenElement){
+        await document.documentElement.requestFullscreen().catch(()=>{});
+      }
+      if (screen.orientation && screen.orientation.lock){
+        await screen.orientation.lock('landscape');
+        setRot(0);
+        toast('横屏');
+        syncMenu();
+        return;
+      }
+      throw new Error('no orientation lock');
+    }catch(e){
+      // 兜底：软件旋转画面，同时尽量把系统钉在竖屏避免叠加
+      try{
+        if (screen.orientation && screen.orientation.lock)
+          screen.orientation.lock('portrait').catch(()=>{});
+      }catch(e2){}
+      setRot(90);
+      toast('横屏（软件）');
+    }
+  } else {
+    try{
+      if (screen.orientation && screen.orientation.lock)
+        await screen.orientation.lock('portrait').catch(()=>{});
+      else if (screen.orientation && screen.orientation.unlock)
+        screen.orientation.unlock();
+    }catch(e){}
+    setRot(0);
+    toast('竖屏');
+  }
+  syncMenu();
+}
+
+document.getElementById('segRot').addEventListener('click', function(e){
+  const b = e.target.closest('button');
+  if (b) setLandscape(b.dataset.rot === '1');
+});
+
+/* 手势：单击显示设置入口（3 秒后自动隐藏）· 双击切单位 · 长按校准俯仰 */
+let lastTap = 0;
+let pressTimer = null;
+let longFired = false;
+
+function inUI(t){
+  return !!(t && t.closest && t.closest('#gear, #menu, #boot'));
+}
+
+document.addEventListener('touchstart', function(e){
+  if (inUI(e.target)) return;
+  longFired = false;
+  clearTimeout(pressTimer);
+  pressTimer = setTimeout(function(){
+    longFired = true;
+    S.pitchOffset += S.tPitch;
+    toast('PITCH 基准已校准');
+  }, 900);
+}, {passive:true});
+
+['touchmove','touchcancel'].forEach(function(ev){
+  document.addEventListener(ev, function(){ clearTimeout(pressTimer); }, {passive:true});
+});
+
+document.addEventListener('touchend', function(e){
+  clearTimeout(pressTimer);
+  if (longFired || inUI(e.target)) return;
+
+  const n = Date.now();
+  if (n - lastTap < 300){
+    // 双击：切单位
+    S.metric = !S.metric;
+    if (menuEl.classList.contains('show')) syncMenu();
+    toast(S.metric ? '公制  KM/H · M' : '英制  KT · FT');
+    lastTap = 0;
+    hideGear();
+    return;
+  }
+  lastTap = n;
+  showGear();          // 单击：露出设置按钮
+}, {passive:true});
+
+document.addEventListener('dblclick', function(){
+  S.metric = !S.metric;
+  toast(S.metric ? '公制  KM/H · M' : '英制  KT · FT');
+});
+
+// 非安全上下文提示
+if (!window.isSecureContext){
+  var tipEl = document.getElementById('tip');
+  if (location.protocol === 'file:'){
+    tipEl.innerHTML =
+      'file:// 下浏览器会禁用传感器与定位<br>将自动进入演示模式<br>' +
+      '<span style="opacity:.8;color:var(--g)">改用电脑起的 https 服务：<br>' +
+      '<b>https://&lt;电脑IP&gt;:8443</b></span>';
+  } else {
+    var httpsUrl = 'https://' + location.hostname + ':8443/';
+    tipEl.innerHTML =
+      '当前地址不是安全上下文<br>浏览器已禁用定位与陀螺仪<br>' +
+      '<span style="color:var(--g)">改用这个地址：<br><b>' + httpsUrl + '</b><br>' +
+      '证书提示不安全时点「高级」→「继续前往」</span>';
+  }
+}
+
+/* 初始化 */
+resize();
+renderThemes();
+applyTheme(S.theme);
+S.startT = performance.now();
+
+const wm = location.search.match(/[?&]warm=([\d.]+)/);
+if (wm) S.warm = parseFloat(wm[1]) || 0;
+
+requestAnimationFrame(frame);
+
+// 免点击模式：?auto 或 #auto（可直接当演示/看板用）
+if (/[?&]auto/.test(location.search) || location.hash === '#auto'){
+  setTimeout(start, 60);
+}
+
+// 低端机降级：关辉光
+if ((navigator.hardwareConcurrency||8) <= 4 && (navigator.deviceMemory||8) <= 2){
+  glow.style.display = 'none';
+}
+
+})();
+</script>
+</body>
+</html>
